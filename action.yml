@@ -1,0 +1,96 @@
+name: Changelog to release notes by LogPulse
+description: Turn your CHANGELOG.md section (Keep a Changelog 2.0) or the commits since the last tag into clean GitHub release notes.
+author: Kalmwerk
+branding:
+  icon: file-text
+  color: green
+
+inputs:
+  github-token:
+    description: Token for reading tags and writing the release. The default workflow token works; give the job "permissions contents write" to update releases.
+    required: false
+    default: ${{ github.token }}
+  tag:
+    description: Tag to write notes for. Defaults to the published release's tag or the pushed tag. On a manual run without one, the newest version in the changelog (or the newest tag) is used.
+    required: false
+    default: ""
+  version:
+    description: Version to look up in the changelog, for tags that don't contain one (e.g. "2026-11"). Defaults to the version in the tag ("v1.2.0" → "1.2.0").
+    required: false
+    default: ""
+  changelog-path:
+    description: Path to the changelog, relative to the repository root.
+    required: false
+    default: CHANGELOG.md
+  source:
+    description: Where notes come from. "auto" uses the changelog section and falls back to commits; "changelog" fails without a section; "commits" always uses commits.
+    required: false
+    default: auto
+  previous-tag:
+    description: Tag the commit range and compare link start from. Defaults to the highest earlier version with the same tag prefix (pre-releases are skipped for a stable release).
+    required: false
+    default: ""
+  exclude-types:
+    description: Conventional Commits types left out of commit-based notes, comma separated. Breaking commits are always kept. Use "none" to keep everything.
+    required: false
+    default: chore,ci,build,test,tests,style
+  max-commits:
+    description: Most commits read for commit-based notes (1 to 1000).
+    required: false
+    default: "250"
+  style:
+    description: '"clean" rewrites the section into breaking changes first, then the Keep a Changelog types, each change once; "original" keeps the section as written.'
+    required: false
+    default: clean
+  update-release:
+    description: Write the notes into the GitHub release for the tag. Set to false to only produce outputs and the job summary.
+    required: false
+    default: "true"
+  create-release:
+    description: Create the release when the tag exists but has no release yet (e.g. on a tag push).
+    required: false
+    default: "true"
+  body-mode:
+    description: What happens to text already in the release. "replace", "append", "prepend", or "keep" (only fill an empty body). Re-runs only ever replace their own block.
+    required: false
+    default: replace
+  summary:
+    description: Write the notes to the job summary.
+    required: false
+    default: "true"
+  compare-link:
+    description: End the notes with a "Full changelog" link comparing the previous tag to this one.
+    required: false
+    default: "true"
+
+outputs:
+  notes:
+    description: The release notes as Markdown.
+  notes-file:
+    description: Path to a file with the release notes, e.g. for "gh release create --notes-file".
+  json:
+    description: The release as JSON in LogPulse's machine-readable changelog shape (version, date, breaking_changes, deprecations, changes).
+  source:
+    description: Where the notes came from, "changelog" or "commits".
+  tag:
+    description: The tag the notes are for (empty when a manual run found a version without a tag).
+  version:
+    description: The version the notes are for, without a leading v.
+  previous-tag:
+    description: The tag the commit range and compare link start from (empty for a first release).
+  has-breaking-changes:
+    description: '"true" when the release has breaking changes, otherwise "false".'
+  breaking-change-count:
+    description: Number of breaking changes.
+  deprecation-count:
+    description: Number of deprecations.
+  release-id:
+    description: ID of the GitHub release that was updated or created (empty when none was touched).
+  release-url:
+    description: URL of that GitHub release.
+  release-action:
+    description: What happened to the release, "updated", "created", "unchanged" or "skipped".
+
+runs:
+  using: node24
+  main: dist/index.js
