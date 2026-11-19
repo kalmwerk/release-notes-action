@@ -110,7 +110,7 @@ These workflows are also in [`examples/`](examples/).
 1. **The tag.** The published release's tag, the pushed tag, or the `tag` input. A manual run without one uses the newest version in the changelog (or the newest tag).
 2. **The version.** Read from the tag: `v1.2.0`, `1.2.0`, `pkg@1.2.0` and `release-1.2` all mean version `1.2.0` / `1.2`. Set `version` for tags without one.
 3. **The changelog section** for that version, e.g. `## [1.2.0] - 2026-11-12`. `1.2` and `1.2.0` match each other. An optional summary paragraph at the top of the section (Keep a Changelog 2.0.0) opens the notes.
-4. **Otherwise, the commits** since the previous tag (unless `source: changelog`, which fails instead). The previous tag is the highest earlier version with the same prefix; a stable release skips pre-release tags, so `2.0.0` covers everything since `1.9.0`.
+4. **Otherwise, the commits** since the previous tag (unless `source: changelog`, which fails instead). The previous tag is the highest earlier version with the same prefix; a stable release skips pre-release tags, so `2.0.0` covers everything since `1.9.0`. Floating major or minor tags like `v1` or `v1.2` are skipped while there's a full version tag to start from, and so is any tag on the release's own commit.
 
 Commits are sorted like this:
 
@@ -189,7 +189,7 @@ All inputs are optional.
 | `version` | from the tag | Version to look up in the changelog, for tags without one. |
 | `changelog-path` | `CHANGELOG.md` | Path to the changelog, relative to the repository root. |
 | `source` | `auto` | `auto`: changelog section, else commits. `changelog`: fail without a section. `commits`: always commits. |
-| `previous-tag` | highest earlier version | Where the commit range and compare link start. |
+| `previous-tag` | highest earlier full version | Where the commit range and compare link start. |
 | `exclude-types` | `chore,ci,build,test,tests,style` | Conventional Commits types left out of commit notes. Breaking commits are always kept. `none` keeps everything. |
 | `max-commits` | `250` | Most commits listed (1–1000); a pull request merged with a merge commit counts as one. |
 | `style` | `clean` | `clean`: breaking changes first, each change once. `original`: the section as written. |

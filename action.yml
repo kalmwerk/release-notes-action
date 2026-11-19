@@ -27,7 +27,7 @@ inputs:
     required: false
     default: auto
   previous-tag:
-    description: Tag the commit range and compare link start from. Defaults to the highest earlier version with the same tag prefix (pre-releases are skipped for a stable release).
+    description: Tag the commit range and compare link start from. Defaults to the highest earlier version with the same tag prefix (pre-releases are skipped for a stable release, floating tags like v1 while a full version tag exists).
     required: false
     default: ""
   exclude-types:

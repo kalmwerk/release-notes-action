@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-11-19
+
+Notes from commits start at the previous full release, never at a floating major tag like `v1`.
+
+### Fixed
+- A floating major or minor tag (`v1`, `v1.2`) on the same commit as a full version tag counted as version 1.0.0 (or 1.2.0), so it could be picked as the previous tag: the notes said "since v1" and the compare link read `v1...v1.0.5` instead of `v1.0.0...v1.0.5`. Once `v1` had moved to the new release, a rerun read an empty range. The previous tag is now the highest earlier full version (`x.y.z`, with or without a `v`). Floating tags count only when there's no full version tag to start from, as in a repository tagged `v1`, `v2`, `v3`; a short tag on a commit of its own, like `v1.1` before `v1.1.5`, is still a release.
+- A tag on the commit being released is never the previous tag, so a version tagged twice, or a floating tag already moved onto the release, can't give an empty range.
+- Run by hand without a tag, the Action takes the newest full version tag rather than a floating tag next to it.
+
+### Changed
+- File paths in `dist/index.js` comments read `// src/...` wherever it's built, so the bundle built from this repository's source is byte for byte the released one.
+
 ## [1.0.5] - 2026-11-18
 
 Release notes keep the bullets and numbered steps nested under an entry.
