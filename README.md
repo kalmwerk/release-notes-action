@@ -1,6 +1,16 @@
 # Changelog to release notes
 
-A free GitHub Action that writes your GitHub release notes from the matching `CHANGELOG.md` section, or from the commits since the last tag when there's no changelog. It runs entirely inside your workflow: no API key, no sign-up, and no calls to anything but GitHub's own API.
+Fills in your GitHub release notes from the matching `CHANGELOG.md` section, or from the commits since the last tag when there's no changelog. Two steps in a job that runs when you publish a release:
+
+```yaml
+steps:
+  - uses: actions/checkout@v7
+  - uses: kalmwerk/release-notes-action@v1
+```
+
+**Permissions:** give the workflow or job `contents: write` (the complete file is under [Quick start](#quick-start)), because the Action edits the release, or creates it on a tag push. The default `GITHUB_TOKEN` is enough: no API key, secret or sign-up, and it calls nothing but GitHub's own API. With `update-release: false` it only reads, so `contents: read` will do.
+
+## What it does
 
 - **Reads the changelog you already keep.** Keep a Changelog 2.0.0 (and 1.1.0), conventional-changelog, changesets, or any file with a version in each release heading.
 - **Breaking changes first.** Entries marked `**Breaking:**` (or `BREAKING`, `⚠️`, `feat!:`) are listed at the top with their migration steps, then every other change once under Added, Changed, Deprecated, Removed, Fixed and Security.
