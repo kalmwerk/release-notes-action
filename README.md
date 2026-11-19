@@ -107,7 +107,7 @@ These workflows are also in [`examples/`](examples/).
 
 ## How it picks the notes
 
-1. **The tag.** The published release's tag, the pushed tag, or the `tag` input. A manual run without one uses the newest version in the changelog (or the newest tag).
+1. **The tag.** The published release's tag, the pushed tag, or the `tag` input. A manual run without one uses the newest version in the changelog (or the newest tag). A floating tag you move onto a release, like `v1` on the same commit as `v1.2.3`, is skipped: that release's own run writes the notes, so nothing is written and `release-action` is `skipped` (set `version` to write notes for it anyway).
 2. **The version.** Read from the tag: `v1.2.0`, `1.2.0`, `pkg@1.2.0` and `release-1.2` all mean version `1.2.0` / `1.2`. Set `version` for tags without one.
 3. **The changelog section** for that version, e.g. `## [1.2.0] - 2026-11-12`. `1.2` and `1.2.0` match each other. An optional summary paragraph at the top of the section (Keep a Changelog 2.0.0) opens the notes.
 4. **Otherwise, the commits** since the previous tag (unless `source: changelog`, which fails instead). The previous tag is the highest earlier version with the same prefix; a stable release skips pre-release tags, so `2.0.0` covers everything since `1.9.0`. Floating major or minor tags like `v1` or `v1.2` are skipped while there's a full version tag to start from, and so is any tag on the release's own commit.
@@ -208,7 +208,7 @@ The notes sit between two invisible HTML comments in the release body, so runnin
 | `notes` | The release notes as Markdown. |
 | `notes-file` | Path to a file with the notes, e.g. for `gh release create --notes-file`. |
 | `json` | The release as JSON in LogPulse's machine-readable changelog shape: `version`, `date`, `breaking_changes[]` (summary, affects, migration), `deprecations[]` (item, replacement, removal_version), `changes`. |
-| `source` | `changelog` or `commits`. |
+| `source` | `changelog` or `commits` (empty when a floating tag like `v1` was skipped). |
 | `tag` | The tag the notes are for (empty when a manual run found a version with no tag yet). |
 | `version` | The version, without a leading `v`. |
 | `previous-tag` | Where the commit range and compare link start (empty for a first release). |

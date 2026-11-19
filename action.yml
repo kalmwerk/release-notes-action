@@ -71,7 +71,7 @@ outputs:
   json:
     description: The release as JSON in LogPulse's machine-readable changelog shape (version, date, breaking_changes, deprecations, changes).
   source:
-    description: Where the notes came from, "changelog" or "commits".
+    description: Where the notes came from, "changelog" or "commits" (empty when a floating tag like v1 was skipped).
   tag:
     description: The tag the notes are for (empty when a manual run found a version without a tag).
   version:
@@ -89,7 +89,7 @@ outputs:
   release-url:
     description: URL of that GitHub release.
   release-action:
-    description: What happened to the release, "updated", "created", "unchanged" or "skipped".
+    description: What happened to the release, "updated", "created", "unchanged" or "skipped" (also for a floating tag like v1 moved onto a release, which writes nothing).
 
 runs:
   using: node24

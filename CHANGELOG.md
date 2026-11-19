@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/2.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-11-19
+
+Moving a floating tag like `v1` onto a release no longer creates a "v1" release.
+
+### Fixed
+- With `on: push: tags: ["v*"]` (the README's tag-push example), moving `v1` onto a new release also runs the workflow. The Action took `v1` as version 1.0.0 and, with `create-release` on by default, created a "v1" release with 1.0.0's notes, which GitHub then showed as the latest release. A floating tag on the same commit as a full version tag of its major (or minor), like `v1` next to `v1.2.3`, is now skipped: nothing is written, the outputs are empty except `tag`, and `release-action` is `skipped`. The same goes for a published release for such a tag. Set the `version` input to write notes for it anyway. A short tag on a commit of its own is still a release, as in projects that only tag `v1`, `v2`, `v3`.
+- For a tag without a version number, the previous tag comes from the nearest earlier tag in the history, and git could name a floating `v1` there instead of the `v1.2.3` on the same commit. It's now the full version tag.
+
 ## [1.0.6] - 2026-11-19
 
 Notes from commits start at the previous full release, never at a floating major tag like `v1`.
