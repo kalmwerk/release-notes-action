@@ -1,12 +1,12 @@
 // LogPulse release notes Action (MIT). Built from src/ with `npm run build`; do not edit by hand.
 "use strict";
 
-// github-action/src/run.ts
+// src/run.ts
 var import_node_fs2 = require("node:fs");
 var import_node_os2 = require("node:os");
 var import_node_path = require("node:path");
 
-// github-action/src/converter/changelog-feed.ts
+// src/converter/changelog-feed.ts
 var VERSION_PATTERN = /^[vV]?[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$/;
 function cleanVersion(v) {
   const t = (v ?? "").trim();
@@ -50,7 +50,7 @@ function compareVersions(a, b) {
   return 0;
 }
 
-// github-action/src/converter/changelog-convert.ts
+// src/converter/changelog-convert.ts
 var CONVERT_LIMITS = {
   /** Characters of markdown accepted (pasted or fetched). */
   maxInputChars: 1e6,
@@ -636,7 +636,7 @@ function convertMarkdownChangelog(markdown, opts = {}) {
   return finalize(releases, unreleased, { name, source: opts.source ?? { kind: "markdown", url: null }, warnings: opts.warnings ?? [], now: opts.now });
 }
 
-// github-action/src/commits.ts
+// src/commits.ts
 var DEFAULT_EXCLUDED_TYPES = ["chore", "ci", "build", "test", "tests", "style"];
 var SECTION_HEADINGS = {
   added: "Added",
@@ -851,7 +851,7 @@ function releaseFromCommits(commits, meta, excludedTypes = DEFAULT_EXCLUDED_TYPE
   return { release, used, skipped };
 }
 
-// github-action/src/git.ts
+// src/git.ts
 var import_node_child_process = require("node:child_process");
 var RECORD = "";
 var FIELD = "";
@@ -888,6 +888,20 @@ var LocalGit = class {
   tags() {
     return (this.run(["tag", "--list"]) ?? "").split("\n").map((t) => t.trim()).filter(Boolean);
   }
+  /**
+   * The commit each tag points at (an annotated tag's commit, not the tag
+   * object), so floating tags like v1 and a release's own commit can be told
+   * apart. Empty when there are no tags.
+   */
+  tagCommits() {
+    const out = /* @__PURE__ */ new Map();
+    for (const line of (this.run(["show-ref", "--tags", "--dereference"]) ?? "").split("\n")) {
+      const m = /^([0-9a-f]{40,64}) refs\/tags\/(.+?)(\^\{\})?$/.exec(line.trim());
+      if (!m) continue;
+      if (m[3] || !out.has(m[2])) out.set(m[2], m[1]);
+    }
+    return out;
+  }
   /** The nearest tag reachable from the commit before `ref`, for tags without a version number. */
   tagBefore(ref) {
     return this.run(["describe", "--tags", "--abbrev=0", `${ref}^`])?.trim() || null;
@@ -916,7 +930,7 @@ var LocalGit = class {
   }
 };
 
-// github-action/src/github.ts
+// src/github.ts
 var GitHubError = class extends Error {
   constructor(message, status) {
     super(message);
@@ -994,13 +1008,13 @@ var GitHub = class {
     const res = await this.request("POST", `${this.repoPath}/releases`, { body: input });
     return res.data;
   }
-  /** Tag names, newest pages first, up to `max`. */
+  /** Tag names with the commit each points at, newest pages first, up to `max`. */
   async listTags(max = 1e3) {
     const out = [];
     for (let page = 1; page <= MAX_PAGES && out.length < max; page++) {
       const res = await this.request("GET", `${this.repoPath}/tags?per_page=100&page=${page}`);
       const batch = res.data ?? [];
-      out.push(...batch.map((t) => t.name));
+      out.push(...batch.map((t) => ({ name: t.name, sha: typeof t.commit?.sha === "string" ? t.commit.sha : null })));
       if (batch.length < 100) break;
     }
     return out.slice(0, max);
@@ -1067,7 +1081,7 @@ function explain(method, path, status, text) {
 }
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// github-action/src/render.ts
+// src/render.ts
 var LISTS = [
   ["added", "Added"],
   ["changed", "Changed"],
@@ -1168,7 +1182,7 @@ ${block}` : `${block}
 ${body.trimStart()}`;
 }
 
-// github-action/src/toolkit.ts
+// src/toolkit.ts
 var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
@@ -1245,7 +1259,7 @@ function appendSummary(markdown, env = process.env) {
   return true;
 }
 
-// github-action/src/versions.ts
+// src/versions.ts
 var TRAILING_VERSION = /(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z.-]+)?)$/;
 function versionFromTag(tag) {
   const t = tag.trim();
@@ -1267,26 +1281,54 @@ function findRelease(changelog, version) {
   const versioned = changelog.releases.filter((r) => !!r.version);
   return versioned.find((r) => norm(r.version) === want) ?? versioned.find((r) => compareVersions(r.version, version) === 0) ?? null;
 }
-function previousTag(current, tags) {
+var isShortVersion = (version) => version.split(/[-+]/)[0].split(".").length < 3;
+function floatingTags(tags, commits) {
+  const fullCommits = /* @__PURE__ */ new Set();
+  for (const tag of tags) {
+    const v = versionFromTag(tag);
+    const sha = commits?.get(tag);
+    if (v && sha && !isShortVersion(v)) fullCommits.add(sha);
+  }
+  const out = /* @__PURE__ */ new Set();
+  for (const tag of tags) {
+    const v = versionFromTag(tag);
+    if (!v || !isShortVersion(v)) continue;
+    const sha = commits?.get(tag);
+    if (!sha || fullCommits.has(sha)) out.add(tag);
+  }
+  return out;
+}
+function previousTag(current, tags, opts = {}) {
   const version = versionFromTag(current);
   if (!version) return null;
   const prefix = tagPrefix(current)?.toLowerCase() ?? "";
   const stable = !isPrerelease(version);
+  const head = opts.head ?? opts.commits?.get(current) ?? null;
+  const floating = floatingTags(tags, opts.commits);
   let best = null;
+  let bestFloating = null;
   for (const tag of tags) {
     if (tag === current) continue;
     const v = versionFromTag(tag);
     if (!v || (tagPrefix(tag)?.toLowerCase() ?? "") !== prefix) continue;
     if (stable && isPrerelease(v)) continue;
     if (compareVersions(v, version) >= 0) continue;
-    if (!best || compareVersions(v, best.version) > 0) best = { tag, version: v };
+    if (head && opts.commits?.get(tag) === head) continue;
+    if (floating.has(tag)) {
+      if (!bestFloating || compareVersions(v, bestFloating.version) > 0) bestFloating = { tag, version: v };
+    } else if (!best || compareVersions(v, best.version) > 0 || compareVersions(v, best.version) === 0 && isShortVersion(best.version) && !isShortVersion(v)) {
+      best = { tag, version: v };
+    }
   }
-  return best?.tag ?? null;
+  return (best ?? bestFloating)?.tag ?? null;
 }
-function latestTag(tags) {
+function latestTag(tags, commits) {
+  const floating = floatingTags(tags, commits);
   const versioned = tags.map((tag) => ({ tag, version: versionFromTag(tag) })).filter((t) => !!t.version);
-  const pick = (list) => list.reduce((best, t) => !best || compareVersions(t.version, best.version) > 0 ? t : best, null);
-  return (pick(versioned.filter((t) => !isPrerelease(t.version))) ?? pick(versioned))?.tag ?? null;
+  const full = versioned.filter((t) => !floating.has(t.tag));
+  const pool = full.length ? full : versioned;
+  const pick = (list) => list.reduce((best, t) => !best || compareVersions(t.version, best.version) > 0 || compareVersions(t.version, best.version) === 0 && isShortVersion(best.version) && !isShortVersion(t.version) ? t : best, null);
+  return (pick(pool.filter((t) => !isPrerelease(t.version))) ?? pick(pool))?.tag ?? null;
 }
 function tagForVersion(version, tags) {
   const want = norm(version);
@@ -1297,7 +1339,7 @@ function tagForVersion(version, tags) {
   return hits.find((t) => t === `v${version}`) ?? hits.find((t) => t === version) ?? hits[0] ?? null;
 }
 
-// github-action/src/run.ts
+// src/run.ts
 var SOURCES = ["auto", "changelog", "commits"];
 var STYLES = ["clean", "original"];
 var BODY_MODES = ["replace", "append", "prepend", "keep"];
@@ -1359,16 +1401,21 @@ async function run(env = process.env, deps = {}) {
   const gitOk = git.usable();
   log.debug(gitOk ? "Using the local git history." : "No full local history; using the GitHub API for tags and commits.");
   let tagCache = null;
-  const tags = async () => {
+  const tagList = async () => {
     if (tagCache) return tagCache;
     try {
-      tagCache = gitOk ? git.tags() : await gh.listTags();
+      if (gitOk) tagCache = { names: git.tags(), commits: git.tagCommits() };
+      else {
+        const listed = await gh.listTags();
+        tagCache = { names: listed.map((t) => t.name), commits: new Map(listed.flatMap((t) => t.sha ? [[t.name, t.sha]] : [])) };
+      }
     } catch (e) {
       warn(`Couldn't list tags (${e.message}).`);
-      tagCache = [];
+      tagCache = { names: [], commits: /* @__PURE__ */ new Map() };
     }
     return tagCache;
   };
+  const tags = async () => (await tagList()).names;
   const eventTag = ctx.eventName === "release" ? ctx.eventRelease?.tag_name ?? null : null;
   const refTag = ctx.ref.startsWith("refs/tags/") ? ctx.ref.slice("refs/tags/".length) : null;
   let tag = inputs.tag || eventTag || refTag;
@@ -1399,7 +1446,8 @@ async function run(env = process.env, deps = {}) {
       tag = tagForVersion(version, await tags());
       if (!tag) log.notice(`Version ${version} from ${changelogLabel} has no tag yet, so no GitHub release is touched. The notes are in the outputs and job summary.`);
     } else {
-      tag = latestTag(await tags());
+      const listed = await tagList();
+      tag = latestTag(listed.names, listed.commits);
       version = tag ? versionFromTag(tag) : null;
     }
   } else if (!tag && version) {
@@ -1431,8 +1479,8 @@ async function run(env = process.env, deps = {}) {
   let prevTag = inputs.previousTag || null;
   const needPrev = !release || inputs.compareLink;
   if (!prevTag && needPrev) {
-    const all = await tags();
-    prevTag = tag ? previousTag(tag, all) : version ? previousTag(`v${version}`, all) : null;
+    const { names: all, commits } = await tagList();
+    prevTag = tag ? previousTag(tag, all, { commits }) : version ? previousTag(`v${version}`, all, { commits, head: ctx.sha || null }) : null;
     if (!prevTag && tag && !versionFromTag(tag) && gitOk) prevTag = git.tagBefore(tag);
   }
   const repoUrl = `${ctx.serverUrl}/${ctx.owner}/${ctx.repo}`;
@@ -1584,7 +1632,7 @@ function renderSummary(r, changelogLabel, compareUrl) {
   return lines.join("\n");
 }
 
-// github-action/src/main.ts
+// src/main.ts
 run().catch((e) => {
   log.error(e instanceof Error ? e.message : String(e));
   process.exitCode = 1;
