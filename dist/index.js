@@ -1298,6 +1298,20 @@ function floatingTags(tags, commits) {
   }
   return out;
 }
+function fullTagFor(tag, tags, commits, sha) {
+  const v = versionFromTag(tag);
+  if (!v || !isShortVersion(v) || isPrerelease(v)) return null;
+  const at = commits?.get(tag) || sha || null;
+  if (!at) return null;
+  const prefix = tagPrefix(tag)?.toLowerCase() ?? "";
+  const family = `${v}.`;
+  const same = tags.filter((t) => {
+    if (t === tag || commits?.get(t) !== at || (tagPrefix(t)?.toLowerCase() ?? "") !== prefix) return false;
+    const tv = versionFromTag(t);
+    return !!tv && !isShortVersion(tv) && tv.startsWith(family);
+  });
+  return same.length ? latestTag(same, commits) : null;
+}
 function previousTag(current, tags, opts = {}) {
   const version = versionFromTag(current);
   if (!version) return null;
@@ -1420,6 +1434,12 @@ async function run(env = process.env, deps = {}) {
   const refTag = ctx.ref.startsWith("refs/tags/") ? ctx.ref.slice("refs/tags/".length) : null;
   let tag = inputs.tag || eventTag || refTag;
   let version = inputs.version || (tag ? versionFromTag(tag) : null);
+  const shortTag = tag && !inputs.version ? versionFromTag(tag) : null;
+  if (tag && shortTag && isShortVersion(shortTag)) {
+    const listed = await tagList();
+    const full = fullTagFor(tag, listed.names, listed.commits, tag === refTag ? ctx.sha || null : null);
+    if (full) return skipFloatingTag(tag, full, inputs.summary, env);
+  }
   let changelog = null;
   const changelogLabel = inputs.changelogPath;
   if (inputs.source !== "commits") {
@@ -1481,7 +1501,10 @@ async function run(env = process.env, deps = {}) {
   if (!prevTag && needPrev) {
     const { names: all, commits } = await tagList();
     prevTag = tag ? previousTag(tag, all, { commits }) : version ? previousTag(`v${version}`, all, { commits, head: ctx.sha || null }) : null;
-    if (!prevTag && tag && !versionFromTag(tag) && gitOk) prevTag = git.tagBefore(tag);
+    if (!prevTag && tag && !versionFromTag(tag) && gitOk) {
+      prevTag = git.tagBefore(tag);
+      if (prevTag) prevTag = fullTagFor(prevTag, all, commits) ?? prevTag;
+    }
   }
   const repoUrl = `${ctx.serverUrl}/${ctx.owner}/${ctx.repo}`;
   const head = tag ?? ctx.sha;
@@ -1573,6 +1596,22 @@ async function run(env = process.env, deps = {}) {
   };
   if (inputs.summary) appendSummary(renderSummary(result, changelogLabel, compareUrl), env);
   return result;
+}
+function skipFloatingTag(tag, full, summary, env) {
+  const message = `${tag} is a floating tag on the same commit as ${full}, not a release of its own, so nothing was written: ${full}'s own run writes its notes. Set the version input to write notes for ${tag} anyway.`;
+  log.notice(message);
+  const empty = ["notes", "notes-file", "json", "source", "version", "previous-tag", "release-id", "release-url"];
+  for (const name of empty) setOutput(name, "", env);
+  setOutput("tag", tag, env);
+  setOutput("has-breaking-changes", false, env);
+  setOutput("breaking-change-count", 0, env);
+  setOutput("deprecation-count", 0, env);
+  setOutput("release-action", "skipped", env);
+  if (summary) appendSummary(`### Release notes for ${tag}
+
+${message}
+`, env);
+  return null;
 }
 async function readChangelog(path, ctx, gh, tag, warn) {
   const local = (0, import_node_path.isAbsolute)(path) ? path : (0, import_node_path.resolve)(ctx.workspace, path);
