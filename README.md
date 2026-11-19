@@ -123,7 +123,7 @@ Commits are sorted like this:
 | `feat!:` or a `BREAKING CHANGE:` footer | Breaking changes, footer as migration steps |
 | `chore:`, `ci:`, `build:`, `test:`, `style:`, release commits, branch merges | Left out (see `exclude-types`) |
 
-Merge commits for pull requests use the pull request title, with its number.
+A pull request merged with a merge commit is one entry, its title with its number, and the commits on its branch aren't repeated (a breaking commit there makes the entry breaking, with its migration steps). Squashed, it's its one commit; rebased, each commit is listed once. A pull request that brings in other pull requests, like `develop` into `main`, is listed as those pull requests.
 
 ## Example
 
@@ -191,7 +191,7 @@ All inputs are optional.
 | `source` | `auto` | `auto`: changelog section, else commits. `changelog`: fail without a section. `commits`: always commits. |
 | `previous-tag` | highest earlier version | Where the commit range and compare link start. |
 | `exclude-types` | `chore,ci,build,test,tests,style` | Conventional Commits types left out of commit notes. Breaking commits are always kept. `none` keeps everything. |
-| `max-commits` | `250` | Most commits read (1–1000). |
+| `max-commits` | `250` | Most commits listed (1–1000); a pull request merged with a merge commit counts as one. |
 | `style` | `clean` | `clean`: breaking changes first, each change once. `original`: the section as written. |
 | `update-release` | `true` | Write the notes into the GitHub release for the tag. `false` only sets outputs and the job summary. |
 | `create-release` | `true` | Create the release if the tag exists but has no release yet. Never creates tags. |
@@ -243,6 +243,20 @@ npm run build     # rebuild dist/index.js; commit it with the source
 `src/converter/` is a copy of the parser from LogPulse's free converter; see [its README](src/converter/README.md).
 
 Want hosted changelog pages and release emails? [LogPulse](https://release-ripple-roadmap.lovable.app) hosts changelog pages free; release emails come with Pro, which opens soon (join the waitlist).
+
+## Related tools
+
+These free pages are on LogPulse, our own site: Kalmwerk makes both this Action and LogPulse, so read them as ours, not as independent picks. You don't need any of them to use the Action.
+
+- [Changelog to JSON](https://release-ripple-roadmap.lovable.app/tools/changelog-to-json): paste a `CHANGELOG.md` and see what this Action will read from it. It's the same parser.
+- [Changelog validator](https://release-ripple-roadmap.lovable.app/tools/changelog-validator): checks a `CHANGELOG.md` against Keep a Changelog 2.0.0, with line numbers and a fix for each issue.
+- [Changelog badge](https://release-ripple-roadmap.lovable.app/tools/changelog-badge): a README badge that runs that check and links to the report.
+- [Changelog from git commits](https://release-ripple-roadmap.lovable.app/tools/changelog-from-commits): paste `git log` output and get a Keep a Changelog section, sorted with this Action's commit rules. It runs in your browser.
+- [GitHub release notes generator](https://release-ripple-roadmap.lovable.app/tools/github-release-notes): notes for the commits and merged pull requests between two releases or tags of a public repository, or for old tags that never got notes.
+- [Release notes from GitHub](https://release-ripple-roadmap.lovable.app/tools/release-notes-from-github): everything merged since a public repository's last tag, breaking changes first.
+- [GitLab CI/CD component](https://release-ripple-roadmap.lovable.app/tools/gitlab-component): the same release notes for GitLab releases, with `CI_JOB_TOKEN` only.
+- [This Action's page](https://release-ripple-roadmap.lovable.app/tools/github-action): the workflows above, a rendered example and a download with its SHA-256.
+- Guide: [how to generate a changelog from git commits](https://release-ripple-roadmap.lovable.app/guides/generate-changelog-from-git), with the `git log` commands for a first draft.
 
 ## License
 

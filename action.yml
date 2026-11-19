@@ -35,7 +35,7 @@ inputs:
     required: false
     default: chore,ci,build,test,tests,style
   max-commits:
-    description: Most commits read for commit-based notes (1 to 1000).
+    description: Most commits listed in commit-based notes (1 to 1000). A pull request merged with a merge commit counts as one.
     required: false
     default: "250"
   style:
