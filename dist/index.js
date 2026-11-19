@@ -57,6 +57,9 @@ var CONVERT_LIMITS = {
   maxReleases: 500,
   /** Items kept per change list in one release. */
   maxItemsPerList: 200,
+  /** Nested list items kept under one entry, and the levels kept (deeper items sit on the deepest level). */
+  maxNestedItems: 50,
+  maxNestedDepth: 4,
   /** Releases listed in the llms.txt summary (the JSON has all of them). */
   maxSummaryReleases: 100
 };
@@ -77,6 +80,17 @@ function plainText(md) {
   return md.split(/(`[^`]*`)/).map(
     (part, i) => i % 2 ? part : part.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1").replace(/<\/?[a-z][^>]*>/gi, "").replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/(^|[\s(])[*_]([^*_\s][^*_]*?)[*_](?=$|[\s).,:;!?])/g, "$1$2")
   ).join("").replace(/\s+/g, " ").trim();
+}
+function expandTabs(lines) {
+  let inFence = false;
+  return lines.map((l) => {
+    if (FENCE.test(l)) inFence = !inFence;
+    if (inFence || !/^[ ]*\t/.test(l)) return l;
+    const lead = /^[ \t]*/.exec(l)[0];
+    let width = 0;
+    for (const ch of lead) width = ch === "	" ? width + 4 - width % 4 : width + 1;
+    return " ".repeat(width) + l.slice(lead.length);
+  });
 }
 function dedent(lines) {
   const indents = lines.filter((l) => l.trim()).map((l) => /^\s*/.exec(l)[0].length);
@@ -130,7 +144,8 @@ function sectionKind(heading) {
   if (/chang|improv|enhanc|updat|perf|refactor|tweak|polish|optimi|^misc/.test(h)) return "changed";
   return "other";
 }
-function extractItems(lines) {
+function extractItems(input) {
+  const lines = expandTabs(input);
   let inFence = false;
   let base = Infinity;
   for (const l of lines) {
@@ -207,8 +222,76 @@ function extractItems(lines) {
   push();
   return items.filter((i) => i.text);
 }
+var ANY_FENCE = /^\s*(```|~~~)/;
+function nestedList(detail) {
+  const out = [];
+  const stack = [];
+  let last = null;
+  let blank = false;
+  let inFence = false;
+  for (const line of expandTabs(detail.split("\n"))) {
+    if (ANY_FENCE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (!line.trim()) {
+      blank = true;
+      continue;
+    }
+    const indent2 = /^ */.exec(line)[0].length;
+    const m = LIST_ITEM.exec(line);
+    if (m) {
+      if (out.length >= CONVERT_LIMITS.maxNestedItems) break;
+      while (stack.length && indent2 < stack[stack.length - 1].indent - 1) stack.pop();
+      let level = stack[stack.length - 1];
+      const ordered = /\d/.test(m[2]);
+      const start = ordered ? parseInt(m[2], 10) : 1;
+      if (!level || indent2 >= level.indent + 2 && stack.length < CONVERT_LIMITS.maxNestedDepth) {
+        const parent = level?.item ?? null;
+        level = { indent: indent2, pad: parent ? parent.pad + parent.marker.length + 1 : 2, ordered, next: start, item: null };
+        stack.push(level);
+      } else if (level.ordered !== ordered) {
+        level.ordered = ordered;
+        level.next = start;
+      }
+      last = { pad: level.pad, marker: ordered ? `${level.next++}.` : "-", parts: [m[3]], col: indent2 + m[2].length + 1 };
+      level.item = last;
+      out.push(last);
+      blank = false;
+      continue;
+    }
+    if (last && (!blank || indent2 >= last.col)) last.parts.push(line.trim());
+    else last = null;
+    blank = false;
+  }
+  return out.flatMap((o) => {
+    const text = clip(plainText(o.parts.join(" ")), 500);
+    return text ? [`${" ".repeat(o.pad)}${o.marker} ${text}`] : [];
+  });
+}
 var CONVENTIONAL = /^([a-z]+)(?:\(([^)]{1,60})\))?(!)?:\s+(.+)$/i;
-var CONVENTIONAL_TYPES = /* @__PURE__ */ new Set(["feat", "feature", "fix", "perf", "refactor", "docs", "chore", "build", "ci", "test", "tests", "style", "revert", "deps", "security"]);
+var CONVENTIONAL_TYPES = /* @__PURE__ */ new Set([
+  "feat",
+  "feature",
+  "fix",
+  "bugfix",
+  "hotfix",
+  "perf",
+  "refactor",
+  "docs",
+  "chore",
+  "build",
+  "ci",
+  "test",
+  "tests",
+  "style",
+  "revert",
+  "deps",
+  "security",
+  "deprecate",
+  "remove"
+]);
 function cleanItem(raw) {
   let text = raw.trim();
   let breaking = false;
@@ -247,8 +330,10 @@ function cleanItem(raw) {
 function kindFromType(type) {
   if (!type) return null;
   if (type === "feat" || type === "feature") return "added";
-  if (type === "fix") return "fixed";
+  if (type === "fix" || type === "bugfix" || type === "hotfix") return "fixed";
   if (type === "security") return "security";
+  if (type === "deprecate") return "deprecated";
+  if (type === "remove") return "removed";
   if (type === "perf" || type === "refactor" || type === "revert") return "changed";
   return "other";
 }
@@ -347,13 +432,15 @@ function buildRelease(meta, bodyLines, opts = {}) {
       if (kind === "other" || kind === "changed") kind = kindFromType(c.type) ?? kind;
       const plain = clip(plainText(c.text), 500);
       summary = summary ?? clip(plain, 280);
-      if (kind === "breaking" || c.breaking || kind === "removed" && removedIsBreaking) {
+      const breakingEntry = kind === "breaking" || c.breaking || section.kind === "removed" && removedIsBreaking;
+      if (breakingEntry) {
         const text = kind === "removed" && !/^(remov|drop|delet)/i.test(c.text) ? `Removed ${c.text.charAt(0).toLowerCase()}${c.text.slice(1)}` : c.text;
         addBreaking(toBreaking({ ...c, text }, item.detail));
       }
       if (kind === "deprecated" || DEPRECATION_HINT.test(plain)) addDep(toDeprecation(c.text));
       const list = kind === "added" || kind === "changed" || kind === "deprecated" || kind === "removed" || kind === "fixed" || kind === "security" ? kind : kind === "breaking" ? "changed" : "other";
-      if (changes[list].length < CONVERT_LIMITS.maxItemsPerList) changes[list].push(plain);
+      const nested = breakingEntry ? [] : nestedList(item.detail);
+      if (changes[list].length < CONVERT_LIMITS.maxItemsPerList) changes[list].push([plain, ...nested].join("\n"));
     }
   }
   if (intro) {
@@ -589,31 +676,125 @@ var VERB_SECTIONS = [
 ];
 var BOOKKEEPING = /^(?:v?\d+\.\d+\.\d+\S*$|(?:\w+(?:\([^)]*\))?:\s*)?(?:release|prepare release|bump version|version bump|publish|tag)\b.*\d+\.\d+)/i;
 var TRAILER = /^(?:signed-off-by|co-authored-by|reviewed-by|acked-by|refs?|closes|fixes|change-id|cc):/i;
+var GITHUB_MERGE = /^Merge pull request #(\d+) from \S+/i;
+var GITLAB_MERGE = /^Merge branch '[^'\n]+' into '[^'\n]+'\s*$/;
+var GITLAB_REF = /^See merge request \S*!(\d+)\s*$/;
+var TITLE_REF = /\s\(#(\d+)\)$/;
+var SQUASHED = /^\* \S/;
+var SQUASHED_BREAKING = /^\* [a-z]+(?:\([^)]{1,60}\))?!:\s/i;
+function requestMerge(commit) {
+  const lines = commit.message.replace(/\r\n?/g, "\n").split("\n");
+  const subject = (lines[0] ?? "").trim();
+  const rest = lines.slice(1);
+  const firstText = (from) => from.findIndex((l) => l.trim());
+  const github = GITHUB_MERGE.exec(subject);
+  if (github) {
+    const at = firstText(rest);
+    if (at < 0) return null;
+    return { ref: `#${github[1]}`, title: rest[at].trim(), body: rest.slice(at + 1).join("\n").trim() };
+  }
+  if (GITLAB_MERGE.test(subject)) {
+    const refAt = rest.findIndex((l) => GITLAB_REF.test(l.trim()));
+    if (refAt < 0) return null;
+    const body = rest.slice(0, refAt);
+    const at = firstText(body);
+    if (at < 0 || /^Merge branch\b/i.test(body[at].trim())) return null;
+    return { ref: `!${GITLAB_REF.exec(rest[refAt].trim())[1]}`, title: body[at].trim(), body: body.slice(at + 1).join("\n").trim() };
+  }
+  const titled = commit.parents > 1 ? TITLE_REF.exec(subject) : null;
+  if (titled) return { ref: `#${titled[1]}`, title: subject, body: rest.join("\n").trim() };
+  return null;
+}
+var parentsOf = (c) => c.parentShas ?? [];
+var isRequestMerge = (c) => parentsOf(c).length > 1 && requestMerge(c) !== null;
+function releaseCommits(commits, head) {
+  if (!commits.some((c) => c.parentShas)) return commits;
+  const byId = new Map(commits.map((c) => [c.sha, c]));
+  let start = head && byId.has(head) ? head : null;
+  if (!start) {
+    const isParent = new Set(commits.flatMap(parentsOf));
+    start = commits.find((c) => !isParent.has(c.sha))?.sha ?? null;
+    if (!start) return commits;
+  }
+  const position = new Map(commits.map((c, i) => [c.sha, i]));
+  const claimed = /* @__PURE__ */ new Set();
+  const reachable = (shas) => {
+    const found = /* @__PURE__ */ new Set();
+    const stack = [...shas];
+    while (stack.length) {
+      const c = byId.get(stack.pop());
+      if (!c || found.has(c.sha) || claimed.has(c.sha)) continue;
+      found.add(c.sha);
+      stack.push(...parentsOf(c));
+    }
+    return [...found].sort((a, b) => position.get(a) - position.get(b)).map((sha) => byId.get(sha));
+  };
+  const line = (sha) => {
+    const chain = [];
+    for (let c = byId.get(sha); c && !claimed.has(c.sha); c = byId.get(parentsOf(c)[0] ?? "")) {
+      claimed.add(c.sha);
+      chain.push(c);
+    }
+    const replaced = /* @__PURE__ */ new Map();
+    for (const c of [...chain].reverse()) {
+      const sides = parentsOf(c).slice(1);
+      if (!sides.length) continue;
+      const branch = reachable(sides);
+      const request = requestMerge(c) !== null;
+      if (request && !branch.some(isRequestMerge)) {
+        for (const b of branch) claimed.add(b.sha);
+        replaced.set(c.sha, [{ ...c, branchCommits: branch }]);
+      } else {
+        const brought = sides.flatMap(line);
+        replaced.set(c.sha, request ? brought : [c, ...brought]);
+      }
+    }
+    return chain.flatMap((c) => replaced.get(c.sha) ?? [c]);
+  };
+  return line(start);
+}
+function footerText(text, squash) {
+  const lines = text.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^-{3,}\s*$/.test(l.trim())) break;
+    if (squash && i > 0 && SQUASHED.test(l) && !lines[i - 1].trim()) break;
+    if (!TRAILER.test(l.trim())) out.push(l);
+  }
+  return out.join("\n").trim();
+}
+var KNOWN_COMMIT_TYPES = [...Object.keys(TYPE_SECTION), ...DEFAULT_EXCLUDED_TYPES];
+function converterLine(subject, conv, type, breaking) {
+  const bangRead = !!conv?.[3] && !!type && CONVENTIONAL_TYPES.has(type);
+  return `${breaking && !bangRead ? "BREAKING: " : ""}${subject}`;
+}
 function commitEntry(commit, excludedTypes = DEFAULT_EXCLUDED_TYPES) {
   const lines = commit.message.replace(/\r\n?/g, "\n").split("\n");
   let subject = (lines[0] ?? "").trim();
   let body = lines.slice(1).join("\n").trim();
   if (!subject) return null;
-  const pr = /^Merge pull request #(\d+) from \S+/i.exec(subject);
-  if (pr) {
-    const [title = "", ...rest] = body.split("\n");
-    if (!title.trim()) return null;
-    subject = `${title.trim()} (#${pr[1]})`;
-    body = rest.join("\n").trim();
-  } else if (commit.parents > 1 || /^Merge (?:branch|remote-tracking branch|tag|commit)\b/i.test(subject)) {
+  const request = requestMerge(commit);
+  if (request) {
+    subject = request.title.endsWith(`(${request.ref})`) ? request.title : `${request.title} (${request.ref})`;
+    body = request.body;
+  } else if (commit.parents > 1 || /^Merge (?:pull request|branch|remote-tracking branch|tag|commit)\b/i.test(subject)) {
     return null;
   }
+  const squash = TITLE_REF.test(subject) && SQUASHED.test(body);
   const footer = /^BREAKING[ -]CHANGE:\s*([\s\S]*)$/m.exec(body);
-  const migration = footer ? footer[1].split("\n").filter((l) => !TRAILER.test(l.trim())).join("\n").trim() : "";
+  const migration = footer ? footerText(footer[1], squash) : "";
+  const squashBreaking = squash && body.split("\n").some((l) => SQUASHED_BREAKING.test(l));
+  const fromBranch = (commit.branchCommits ?? []).map((b) => commitEntry(b, [])).filter((e) => !!e?.breaking);
+  const detail = [...new Set([migration, ...fromBranch.map((e) => e.detail)].filter(Boolean))].join("\n\n");
   const conv = CONVENTIONAL2.exec(subject);
   const type = conv ? conv[1].toLowerCase() : null;
-  const breaking = !!footer || !!conv?.[3];
+  const breaking = !!footer || !!conv?.[3] || squashBreaking || fromBranch.length > 0;
   if (BOOKKEEPING.test(subject) && !breaking) return null;
   if (type && excludedTypes.includes(type) && !breaking) return null;
   const text = conv ? conv[4] : subject;
   const section = type && TYPE_SECTION[type] || VERB_SECTIONS.find(([re]) => re.test(text))?.[1] || "other";
-  const line = `${breaking && !conv?.[3] ? "BREAKING: " : ""}${subject}`;
-  return { section, line, detail: migration, breaking };
+  return { section, line: converterLine(subject, conv, type, breaking), detail, breaking };
 }
 function commitsToMarkdown(commits, excludedTypes = DEFAULT_EXCLUDED_TYPES) {
   const groups = /* @__PURE__ */ new Map();
@@ -675,22 +856,26 @@ var import_node_child_process = require("node:child_process");
 var RECORD = "";
 var FIELD = "";
 var LOG_FORMAT = `%H${FIELD}%P${FIELD}%cs${FIELD}%B${RECORD}`;
+var RANGE_LIMIT = 2e4;
 function parseLog(out) {
   return out.split(RECORD).map((r) => r.replace(/^\n+/, "")).filter((r) => r.trim()).map((r) => {
     const [sha = "", parents = "", date = "", message = ""] = r.split(FIELD);
-    return { sha, parents: parents.trim() ? parents.trim().split(/\s+/).length : 0, date: date || null, message: message.trim() };
+    const parentShas = parents.trim() ? parents.trim().split(/\s+/) : [];
+    return { sha, parents: parentShas.length, parentShas, date: date || null, message: message.trim() };
   });
 }
 var LocalGit = class {
-  constructor(cwd) {
-    this.cwd = cwd;
-  }
-  run(args) {
-    try {
-      return (0, import_node_child_process.execFileSync)("git", args, { cwd: this.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
-    } catch {
-      return null;
-    }
+  run;
+  range = null;
+  /** `run` replaces the git binary, for tests. */
+  constructor(cwd, run2) {
+    this.run = run2 ?? ((args) => {
+      try {
+        return (0, import_node_child_process.execFileSync)("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 });
+      } catch {
+        return null;
+      }
+    });
   }
   /** True when git works here and has the whole history (so tags and ranges are complete). */
   usable() {
@@ -707,16 +892,27 @@ var LocalGit = class {
   tagBefore(ref) {
     return this.run(["describe", "--tags", "--abbrev=0", `${ref}^`])?.trim() || null;
   }
-  /** Commits in (from, to], newest first, up to `max`. */
-  commits(from, to, max) {
-    const range = from ? `${from}..${to}` : to;
-    const out = this.run(["log", `--max-count=${max}`, `--format=${LOG_FORMAT}`, range, "--"]);
-    return out === null ? [] : parseLog(out);
+  /** The range (from, to] as release notes read it (releaseCommits), read once per range. */
+  history(from, to) {
+    const key2 = `${from ?? ""}..${to}`;
+    if (this.range?.key === key2) return this.range.commits;
+    const head = this.run(["rev-parse", "--verify", "--quiet", `${to}^{commit}`])?.trim() || null;
+    const out = this.run(["log", `--max-count=${RANGE_LIMIT}`, `--format=${LOG_FORMAT}`, from ? `${from}..${to}` : to, "--"]);
+    const commits = out === null ? [] : releaseCommits(parseLog(out), head);
+    this.range = { key: key2, commits };
+    return commits;
   }
-  /** Number of commits in (from, to], to report when the list was capped. */
+  /**
+   * Commits in (from, to], newest first, up to `max`: the target branch's own
+   * commits and one merge commit per pull or merge request, without the
+   * commits on its branch (see releaseCommits).
+   */
+  commits(from, to, max) {
+    return this.history(from, to).slice(0, max);
+  }
+  /** How many commits commits() lists without the cap, to report when the list was cut. */
   count(from, to) {
-    const out = this.run(["rev-list", "--count", from ? `${from}..${to}` : to, "--"]);
-    return out === null ? null : Number(out.trim());
+    return this.history(from, to).length;
   }
 };
 
@@ -809,32 +1005,36 @@ var GitHub = class {
     }
     return out.slice(0, max);
   }
-  /** Commits in base...head, newest first, up to `max`. */
-  async compare(base, head, max) {
-    const commits = [];
-    let total = 0;
-    for (let page = 1; page <= MAX_PAGES && commits.length < max; page++) {
-      const res = await this.request(
-        "GET",
-        `${this.repoPath}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100&page=${page}`
-      );
-      total = res.data?.total_commits ?? 0;
-      const batch = res.data?.commits ?? [];
+  /**
+   * Every commit in base...head, newest first: the whole range, because
+   * telling a pull request's branch commits from the target branch's needs all
+   * of them. Ranges over MAX_PAGES pages keep their newest commits (the API
+   * lists oldest first); `complete` says whether that happened.
+   */
+  async compare(base, head) {
+    const path = (page) => `${this.repoPath}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}?per_page=100&page=${page}`;
+    const first = await this.request("GET", path(1));
+    const total = first.data?.total_commits ?? 0;
+    const pages = Math.max(1, Math.ceil(total / 100));
+    const from = pages > MAX_PAGES ? pages - MAX_PAGES + 1 : 1;
+    const commits = from === 1 ? (first.data?.commits ?? []).map(toCommit) : [];
+    for (let page = Math.max(from, 2); page <= pages; page++) {
+      const batch = (await this.request("GET", path(page))).data?.commits ?? [];
       commits.push(...batch.map(toCommit));
       if (batch.length < 100) break;
     }
-    return { commits: commits.reverse().slice(0, max), total };
+    return { commits: commits.reverse(), total, complete: from === 1 };
   }
-  /** History reachable from `ref`, newest first, up to `max` (for a first release). */
-  async listCommits(ref, max) {
+  /** History reachable from `ref`, newest first, a page at a time until `enough` says so (for a first release). */
+  async listCommits(ref, enough = () => false) {
     const out = [];
-    for (let page = 1; page <= MAX_PAGES && out.length < max; page++) {
+    for (let page = 1; page <= MAX_PAGES; page++) {
       const res = await this.request("GET", `${this.repoPath}/commits?sha=${encodeURIComponent(ref)}&per_page=100&page=${page}`);
       const batch = res.data ?? [];
       out.push(...batch.map(toCommit));
-      if (batch.length < 100) break;
+      if (batch.length < 100 || enough(out)) break;
     }
-    return out.slice(0, max);
+    return out;
   }
   /** A file's text at a ref, or null when it doesn't exist there. */
   async fileAt(path, ref) {
@@ -848,7 +1048,8 @@ var GitHub = class {
 };
 function toCommit(c) {
   const date = c.commit.committer?.date ?? c.commit.author?.date ?? null;
-  return { sha: c.sha, message: c.commit.message, parents: c.parents?.length ?? 1, date: date ? date.slice(0, 10) : null };
+  const parentShas = (c.parents ?? []).flatMap((p) => typeof p?.sha === "string" ? [p.sha] : []);
+  return { sha: c.sha, message: c.commit.message, parents: c.parents?.length ?? 1, parentShas, date: date ? date.slice(0, 10) : null };
 }
 function explain(method, path, status, text) {
   let detail = "";
@@ -877,7 +1078,7 @@ var LISTS = [
   ["other", "Other changes"]
 ];
 var MAX_BODY_CHARS = 12e4;
-var key = (s) => s.toLowerCase().replace(/^removed\s+/, "").replace(/[\s.!…]+$/, "").trim();
+var key = (s) => s.split("\n")[0].toLowerCase().replace(/^removed\s+/, "").replace(/[\s.!…]+$/, "").trim();
 function isBreakingEntry(entry, release) {
   const e = key(entry);
   if (!e) return false;
@@ -1249,7 +1450,7 @@ async function run(env = process.env, deps = {}) {
     else if (built.used === 0) warn(`None of the ${commits.length} commits look user-facing (types skipped: ${inputs.excludeTypes.join(", ") || "none"}).`);
   }
   const style = source === "commits" ? "clean" : inputs.style;
-  const notes = renderReleaseNotes(release, {
+  const notes = renderReleaseNotes(notesRelease(release, source), {
     style,
     headingLevel: 2,
     compareUrl,
@@ -1344,15 +1545,16 @@ async function readChangelog(path, ctx, gh, tag, warn) {
 }
 async function readCommits(head, prev, max, git, gitOk, gh) {
   if (gitOk && git.resolves(head) && (!prev || git.resolves(prev))) {
-    const commits2 = git.commits(prev, head, max);
-    return { commits: commits2, total: git.count(prev, head) ?? commits2.length };
+    const commits = git.commits(prev, head, max);
+    return { commits, total: git.count(prev, head) ?? commits.length };
   }
   if (prev) {
-    const { commits: commits2, total } = await gh.compare(prev, head, max);
-    return { commits: commits2, total };
+    const range = await gh.compare(prev, head);
+    const all2 = releaseCommits(range.commits);
+    return { commits: all2.slice(0, max), total: range.complete ? all2.length : Math.max(all2.length, range.total) };
   }
-  const commits = await gh.listCommits(head, max);
-  return { commits, total: commits.length };
+  const all = releaseCommits(await gh.listCommits(head, (soFar) => releaseCommits(soFar).length > max));
+  return { commits: all.slice(0, max), total: all.length };
 }
 async function tagExists(tag, ctx, git, gitOk, tags) {
   if (ctx.ref === `refs/tags/${tag}`) return true;
@@ -1365,6 +1567,7 @@ function writeNotesFile(dir, label, notes) {
   (0, import_node_fs2.writeFileSync)(file, notes + "\n", "utf8");
   return file;
 }
+var notesRelease = (release, source) => source === "commits" ? { ...release, summary: null } : release;
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function renderSummary(r, changelogLabel, compareUrl) {
   const from = r.source === "changelog" ? `\`${changelogLabel}\`, section ${r.release.version}` : `commits ${r.previousTag ? `since \`${r.previousTag}\`` : "(no earlier tag)"}`;
@@ -1375,7 +1578,7 @@ function renderSummary(r, changelogLabel, compareUrl) {
   lines.push(
     "---",
     "",
-    renderReleaseNotes(r.release, { style: r.style, headingLevel: 4, compareUrl, capitalize: r.source === "commits" }),
+    renderReleaseNotes(notesRelease(r.release, r.source), { style: r.style, headingLevel: 4, compareUrl, capitalize: r.source === "commits" }),
     ""
   );
   return lines.join("\n");
